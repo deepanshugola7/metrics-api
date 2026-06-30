@@ -1,9 +1,16 @@
 from fastapi import FastAPI, Request, Response, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from typing import List, Optional
 import time
 import uuid
 import jwt
+import os
+import yaml
+from dotenv import dotenv_values
+
+os.environ["APP_WORKERS"] = "5"
+os.environ["APP_LOG_LEVEL"] = "debug"
 
 app = FastAPI()
 
@@ -27,7 +34,11 @@ async def custom_cors_and_metrics(request: Request, call_next):
     
     # CORS logic
     origin = request.headers.get("origin")
-    if origin == ALLOWED_ORIGIN:
+    if request.url.path == "/effective-config":
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+    elif origin == ALLOWED_ORIGIN:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "*"
@@ -91,6 +102,61 @@ async def verify_token(req: TokenRequest):
         }
     except jwt.InvalidTokenError:
         return JSONResponse(status_code=401, content={"valid": False})
+
+def str_to_bool(val: str) -> bool:
+    if isinstance(val, bool):
+        return val
+    return str(val).lower() in ("true", "1", "yes", "on")
+
+def coerce_type(key: str, value: any) -> any:
+    if key in ("port", "workers"):
+        return int(value)
+    if key == "debug":
+        return str_to_bool(value)
+    return str(value)
+
+@app.get("/effective-config")
+async def effective_config(set: Optional[List[str]] = Query(default=[])):
+    config = {
+        "port": 8000,
+        "workers": 1,
+        "debug": False,
+        "log_level": "info",
+        "api_key": "default-secret-000"
+    }
+
+    try:
+        with open("config.development.yaml", "r") as f:
+            yaml_config = yaml.safe_load(f) or {}
+            for k, v in yaml_config.items():
+                config[k] = coerce_type(k, v)
+    except FileNotFoundError:
+        pass
+
+    env_config = dotenv_values(".env")
+    for k, v in env_config.items():
+        if k == "NUM_WORKERS":
+            config["workers"] = coerce_type("workers", v)
+        elif k.startswith("APP_"):
+            key = k[4:].lower()
+            config[key] = coerce_type(key, v)
+
+    for k, v in os.environ.items():
+        if k == "NUM_WORKERS":
+            config["workers"] = coerce_type("workers", v)
+        elif k.startswith("APP_"):
+            key = k[4:].lower()
+            config[key] = coerce_type(key, v)
+
+    for override in set:
+        if "=" in override:
+            k, v = override.split("=", 1)
+            config[k] = coerce_type(k, v)
+
+    if "api_key" in config:
+        config["api_key"] = "****"
+
+    return config
 
 if __name__ == "__main__":
     import uvicorn
