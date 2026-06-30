@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, Query
+from fastapi import FastAPI, Request, Response, Query, Header, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -34,7 +34,7 @@ async def custom_cors_and_metrics(request: Request, call_next):
     
     # CORS logic
     origin = request.headers.get("origin")
-    if request.url.path == "/effective-config":
+    if request.url.path in ["/effective-config", "/analytics"]:
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "*"
         response.headers["Access-Control-Allow-Headers"] = "*"
@@ -157,6 +157,44 @@ async def effective_config(set: Optional[List[str]] = Query(default=[])):
         config["api_key"] = "****"
 
     return config
+
+class Event(BaseModel):
+    user: str
+    amount: float
+    ts: int
+
+class AnalyticsRequest(BaseModel):
+    events: List[Event]
+
+@app.post("/analytics")
+async def analytics(req: AnalyticsRequest, x_api_key: Optional[str] = Header(None)):
+    if x_api_key != "ak_0aztrh92lumh8gwr8y4o2s19":
+        raise HTTPException(status_code=401, detail="Unauthorized")
+        
+    events = req.events
+    total_events = len(events)
+    
+    unique_users = set()
+    user_revenue = {}
+    total_revenue = 0.0
+    
+    for event in events:
+        unique_users.add(event.user)
+        if event.amount > 0:
+            total_revenue += event.amount
+            user_revenue[event.user] = user_revenue.get(event.user, 0.0) + event.amount
+            
+    top_user = ""
+    if user_revenue:
+        top_user = max(user_revenue.items(), key=lambda x: x[1])[0]
+        
+    return {
+        "email": "24f3004104@ds.study.iitm.ac.in",
+        "total_events": total_events,
+        "unique_users": len(unique_users),
+        "revenue": total_revenue,
+        "top_user": top_user
+    }
 
 if __name__ == "__main__":
     import uvicorn
